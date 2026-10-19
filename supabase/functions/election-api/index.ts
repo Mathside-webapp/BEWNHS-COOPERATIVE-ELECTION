@@ -80,7 +80,8 @@ async function tallyResults(candidates){
  const totals={board:{},audit:{}};
  for(const v of aggregates)totals[v.committee][v.candidate_id]=Number(v.votes);
  const board=rank(candidates.filter(c=>c.active&&c.board),totals.board,5,[],resolutions.filter(x=>x.committee==='board'));
- const audit=board.pending.length?null:rank(candidates.filter(c=>c.active&&c.audit),totals.audit,3,board.winner_ids,resolutions.filter(x=>x.committee==='audit'));
+ // Always include Audit vote counts, even if a Board tie makes the final Audit seat allocation provisional.
+ const audit=rank(candidates.filter(c=>c.active&&c.audit),totals.audit,3,board.winner_ids,resolutions.filter(x=>x.committee==='audit'));
  return {board,audit,board_pending:board.pending.length>0};
 }
 async function readOverview(){
@@ -95,10 +96,10 @@ async function readOverview(){
  const {data:resets,error:er}=await db.from('admin_audit_log').select('admin_id,action,details,logged_at').eq('action','reset_member_vote').order('logged_at',{ascending:false}).limit(50);if(er)throw er;
  const {data:pinRecord,error:pinReadError}=await db.from('election_pin').select('current_pin').eq('id',1).maybeSingle();if(pinReadError)throw pinReadError;
  const memberStates=members.map(m=>({...m,voted:links.has(m.id)||!!coded.get(m.id)?.used_at,submitted_at:links.get(m.id)?.submitted_at||coded.get(m.id)?.used_at,resettable:links.has(m.id)}));
- const showResults=['closed','certified'].includes(settings.status);
+ // This endpoint is restricted to authenticated administrators. Live counts must not be returned by public snapshot.
  return {settings,pin_configured:!!pinRecord,current_pin:pinRecord?.current_pin||null,reset_log:resets,members:memberStates,candidates,eligible_count:memberStates.filter(m=>m.eligible).length,
   voted_count:memberStates.filter(m=>m.voted).length,ballots_count:countBallots||0,
-  results:showResults?await tallyResults(candidates):null,tie_breaks:ties};
+  results:await tallyResults(candidates),tie_breaks:ties};
 }
 async function applySettings(payload,user){
  const old=await readSettings();
@@ -191,6 +192,7 @@ async function handleAdmin(req,action,data){
   const body=String(data.committee||'');const votes=Number(data.vote_count);
   assert(['board','audit'].includes(body)&&Number.isSafeInteger(votes)&&votes>0,'Invalid tie group');
   const candidates=await readCandidates();const results=await tallyResults(candidates);
+  assert(body!=='audit'||!results.board.pending.length,'Resolve Board ties before finalizing Audit seats');
   const pending=results?.[body]?.pending?.find(t=>t.votes===votes);
   assert(!!pending,'This tie group is not unresolved');
   const ids=data.winner_ids;
