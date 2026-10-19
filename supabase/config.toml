@@ -1,0 +1,2 @@
+[functions.election-api]
+verify_jwt = false

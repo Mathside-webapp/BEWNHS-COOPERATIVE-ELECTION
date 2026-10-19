@@ -1,0 +1,7 @@
+{
+  "name": "bewnhs-cooperative-election",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "BEWNHS cooperative election frontend and Supabase Edge Function"
+}
