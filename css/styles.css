@@ -118,3 +118,27 @@
 @media(max-width:600px){.selection-footer-inner{flex-wrap:wrap;gap:12px}.selection-footer .ballot-steps{width:100%;justify-content:center;gap:8px}.selection-footer .step{font-size:11px;gap:5px}.selection-footer .step b{width:25px;height:25px}.selection-footer .step.divider{width:15px}.selection-footer-inner>.btn,.selection-footer .footer-buttons{width:100%;justify-content:center}.ballot-main{padding-bottom:180px}.voter-identity{font-size:14px!important}}
 
 .current-election-pin{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:24px;margin:20px 0;background:#fff6e6;border:1px solid #ead4a9;border-radius:18px;color:var(--wine)}.pin-digits{display:block;font-size:clamp(24px,4vw,38px);letter-spacing:.15em;margin:12px 0;overflow-wrap:anywhere}.current-election-pin p{font-size:13px;margin:0;line-height:1.6}.current-election-pin>.icon{flex:none}
+
+/* GitHub update: explicit, reviewable candidate and voter changes */
+.draft-banner{border:1px solid #e8ddcf;background:#fffbf5;border-radius:12px;padding:13px 16px;margin:14px 0;display:flex;color:#60575a}
+.draft-banner.has-drafts{border-color:#dfc18f;background:#fff8e9;color:#6d401f}
+.draft-banner>span{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.draft-banner svg{width:19px;height:19px}.draft-banner small{color:#82767b;font-size:11px;line-height:1.5}
+.list-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:24px 0 8px}
+.list-heading h3{font-size:15px;margin:0}
+.bulk-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:13px 0}
+.bulk-bar>span:not(.bulk-heading){font-size:11px;color:#837780}
+.bulk-heading{font-weight:800;color:#6a3041;font-size:11px;margin-left:8px}
+.select-all-label{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;cursor:pointer}
+.select-all-label input{accent-color:var(--wine);width:17px;height:17px}
+.row-pending{background:#fff9ee}.pending-indicator{font-size:10px;font-weight:800;color:#9c6732;margin-top:3px}
+.add-queue-form{margin:22px 0 6px;padding-top:16px;border-top:1px solid var(--line);justify-content:flex-start}
+.queued-list{border:1px solid #e7dbcb;border-radius:12px;padding:14px;background:#fffaf3;margin:12px 0}
+.queued-list>strong{font-size:12px;display:block;margin-bottom:8px}
+.queued-item{padding:7px 4px;border-top:1px solid #f0e6d8;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px}
+.queued-item small{color:#8a7b79}
+.draft-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;border:1px solid #e9e0d5;border-radius:14px;background:#fcf8f4;padding:17px;margin:18px 0 8px}
+.draft-actions>div{margin-right:auto;display:grid;gap:4px}.draft-actions>div strong{font-size:13px;color:#472637}.draft-actions>div span{font-size:11px;color:#877a79}
+.action-spinner{display:inline-block;width:17px;height:17px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
+.btn[aria-busy=true]{opacity:1!important;cursor:wait}.btn:disabled[aria-busy=true]{opacity:1}
+@media(max-width:600px){.draft-actions>.btn{flex:1;min-width:120px}.list-heading{align-items:flex-start;flex-direction:column}.add-queue-form>.input,.add-queue-form>select{max-width:none!important;flex:1 1 180px}.bulk-bar .btn{padding:9px 12px}}

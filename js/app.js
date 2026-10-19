@@ -27,12 +27,92 @@ const ico=(name,cls='')=>`<svg class="icon ${cls}" viewBox="0 0 24 24" fill="non
 const esc=(val='')=>String(val??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const nice=(s='')=>String(s).replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
 const api=new LiveAPI();
-const ui={screen:'home',ballotTab:'board',snapshot:null,admin:null,adminTab:'overview',code:'',voter:'',pin:'',member_id:'',generation:0,voterOptions:null,picked:{board:[],audit:[]},search:{board:'',audit:''},modal:null,loading:false,generatedCodes:null,publishedResults:null,error:''};
+const ui={screen:'home',ballotTab:'board',snapshot:null,admin:null,adminTab:'overview',code:'',voter:'',pin:'',member_id:'',generation:0,voterOptions:null,picked:{board:[],audit:[]},search:{board:'',audit:''},modal:null,loading:false,generatedCodes:null,publishedResults:null,error:'',pending:{eligible:{},board:{},audit:{},voters:[],candidates:[]}};
 
 function showToast(message,type='') {
  const el=document.createElement('div');el.className='toast '+type;el.textContent=message;toastRoot.appendChild(el);setTimeout(()=>el.remove(),4600);
 }
-async function run(fn){if(ui.loading)return;ui.loading=true;try{await fn()}catch(e){showToast(e.message||String(e),'error')}finally{ui.loading=false;render()}}
+function activateBusy(button, message='Processing...'){
+  document.querySelectorAll('button').forEach(b=>{b.disabled=true;});
+  if(button){button.innerHTML=`<span class="action-spinner" aria-hidden="true"></span> ${esc(message)}`;button.setAttribute('aria-busy','true');}
+}
+function loadingMessage(button){
+ const txt=(button?.textContent||'').trim().toLowerCase();
+ if(/save|record|reset|remove ballot/.test(txt))return 'Saving...';
+ if(/sign in|log in|login/.test(txt))return 'Signing in...';
+ if(/log out|exit admin/.test(txt))return 'Signing out...';
+ if(/cast|submit|vote/.test(txt))return 'Submitting...';
+ if(/enter|continue|next|review/.test(txt))return 'Loading...';
+ if(/download|export/.test(txt))return 'Preparing download...';
+ return 'Please wait...';
+}
+async function run(fn,button){
+ if(ui.loading)return;
+ ui.loading=true;
+ activateBusy(button,loadingMessage(button));
+ try{await fn();}
+ catch(e){showToast(e.message||String(e),'error');}
+ finally{ui.loading=false;render();}
+}
+const pendingFor=(field)=>ui.pending[field];
+function baseChoice(member,field){
+ if(field==='eligible')return !!member.eligible;
+ const c=(ui.admin?.candidates||[]).find(c=>c.member_id===member.id);
+ return !!c?.[field];
+}
+function choice(member,field){return Object.hasOwn(pendingFor(field),member.id)?pendingFor(field)[member.id]:baseChoice(member,field);}
+function draftChoice(member,field,value){
+ if(baseChoice(member,field)===value)delete pendingFor(field)[member.id];
+ else pendingFor(field)[member.id]=value;
+}
+function dirtyCount(panel){
+ if(panel==='voters')return Object.keys(ui.pending.eligible).length+ui.pending.voters.length;
+ return new Set([...Object.keys(ui.pending.board),...Object.keys(ui.pending.audit)]).size+ui.pending.candidates.length;
+}
+function queueNotice(panel){const n=dirtyCount(panel);return `<div class="draft-banner ${n?'has-drafts':''}" role="status"><span>${ico(n?'edit':'check')} <strong>${n?n+' unsaved '+(n===1?'change':'changes'):'All changes saved'}</strong><small>${n?'Changes are only on this screen until you click Save.':'Selecting checkboxes will not change Supabase until you save.'}</small></span></div>`;}
+function queuedNames(panel){const list=ui.pending[panel];if(!list.length)return '';
+ return `<div class="queued-list"><strong>Pending additions (not yet saved)</strong>${list.map((v,i)=>`<div class="queued-item"><span>${esc(v.name)} ${panel==='candidates'?`<small>· ${esc(v.committee==='both'?'Both committees':v.committee==='board'?'Board of Directors':'Audit Committee')}</small>`:''}</span><button class="btn ghost small" type="button" data-action="remove-queued" data-panel="${panel}" data-index="${i}">Remove</button></div>`).join('')}</div>`;
+}
+function draftActions(panel){const n=dirtyCount(panel);return `<div class="draft-actions"><div><strong>${n?n+' pending change'+(n===1?'':'s'):'Ready to save'}</strong><span>${n?'These changes have not been saved to Supabase.':'Changes only save when you click the button.'}</span></div><button type="button" class="btn secondary" data-action="discard-drafts" data-panel="${panel}" ${n?'':'disabled'}>Discard changes</button><button type="button" class="btn" data-action="save-drafts" data-panel="${panel}" ${n?'':'disabled'}>${ico('check')} Save ${panel==='voters'?'voters':'candidates'}</button></div>`;}
+async function saveDrafts(panel){
+ const isVoters=panel==='voters';let saved=0;
+ const changes=isVoters?Object.keys(ui.pending.eligible):[...new Set([...Object.keys(ui.pending.board),...Object.keys(ui.pending.audit)])];
+ const newNames=[...ui.pending[panel]];
+ try{
+  for(const id of changes){
+    const m=ui.admin.members.find(m=>m.id===id);if(!m){delete ui.pending.eligible[id];delete ui.pending.board[id];delete ui.pending.audit[id];continue;}
+    if(isVoters){await api.admin('set_member',{member_id:id,eligible:choice(m,'eligible')});delete ui.pending.eligible[id];}
+    else{await api.admin('set_candidate',{member_id:id,board:choice(m,'board'),audit:choice(m,'audit')});delete ui.pending.board[id];delete ui.pending.audit[id];}
+    saved++;
+  }
+  for(const item of newNames){
+    await api.admin('add_member',{name:item.name,role:isVoters?'voter':'candidate',...(isVoters?{}:{committee:item.committee})});
+    const index=ui.pending[panel].indexOf(item);if(index!==-1)ui.pending[panel].splice(index,1);
+    saved++;
+  }
+ }catch(err){
+  // Successfully processed rows were removed from the draft; leave unprocessed changes for retry.
+  throw Error(`${saved} change(s) saved; remaining changes are still pending. ${err.message||err}`);
+ }finally{
+  await getAdmin();
+  await getSnapshot();
+ }
+ showToast(`${saved} ${isVoters?'voter':'candidate'} change(s) saved successfully.`, 'ok');
+}
+function queueMember(name, panel, committee){
+ name=String(name||'').trim();if(name.length<3||name.length>160)throw Error('Enter a valid name (3–160 characters).');
+ const queue=ui.pending[panel];
+ if(queue.some(x=>x.name.toLowerCase()===name.toLowerCase()))throw Error('This person is already in the pending additions.');
+ const existing=ui.admin.members.find(m=>m.name.toLowerCase()===name.toLowerCase());
+ if(panel==='voters'&&existing&&choice(existing,'eligible'))throw Error('This person is already eligible to vote.');
+ if(panel==='candidates'&&existing){
+  const body=committee==='both'?['board','audit']:[committee];
+  if(body.every(f=>choice(existing,f)))throw Error('This person is already nominated for that committee.');
+ }
+ queue.push({name,...(panel==='candidates'?{committee}:{})});
+ showToast(`${name} added to pending ${panel}. Click Save ${panel} to apply.`, 'ok');
+}
+
 async function getSnapshot(){ui.snapshot=await api.snapshot();ui.error='';}
 async function getAdmin(){ui.admin=await api.admin('overview');}
 function setScreen(screen){ui.screen=screen;ui.modal=null;render();window.scrollTo({top:0,behavior:'instant'});}
@@ -99,12 +179,21 @@ function metric(title,value,description,icon){return `<div class="metric"><span>
 function adminOverview(){const a=ui.admin;const turn=a.eligible_count?Math.round(a.voted_count/a.eligible_count*100):0;return `<div class="metrics">${metric('ELIGIBLE VOTERS',a.eligible_count,'Registered members','users')}${metric('BALLOTS CAST',a.ballots_count,'Recorded submissions','vote')}${metric('VOTER TURNOUT',turn+'%','Of eligible members','chart')}${metric('POSITIONS',8,'5 directors · 3 auditors','crown')}</div>
  <div class="card admin-card"><h2>Election participation</h2><div class="review-row"><span class="muted">${a.voted_count} of ${a.eligible_count} eligible voters have participated</span><strong>${turn}%</strong></div><div class="stat-progress"><div style="width:${Math.min(100,turn)}%"></div></div><p class="status-note">Participation is shown separately from anonymous ballot choices. Voter identities cannot be used to retrieve ballots.</p></div>
  <div class="card admin-card"><h2>Election control</h2><div class="notice ${a.settings.status==='open'?'green':''}">Current status: <strong>${esc(nice(a.settings.status))}</strong>. ${a.settings.status==='open'?'Ballots are accepted while the election is open.':'Use Election Settings to update the official election status.'}</div><div class="tools-row" style="margin-top:19px"><button class="btn secondary small" data-action="tab" data-tab="voters">Manage eligible voters ${ico('arrow')}</button><button class="btn secondary small" data-action="tab" data-tab="results">Results dashboard ${ico('arrow')}</button></div></div>`;}
-function adminVoters(){const a=ui.admin;return `<div class="card admin-card"><h2>Voter management</h2><p>One election PIN for all eligible teachers. Candidate choices are hidden from this panel.</p><section class="current-election-pin" aria-label="Current election PIN"><div><span class="tinycaps">Current election PIN</span><strong class="pin-digits">${a.current_pin?esc(a.current_pin):'Not available yet'}</strong><p>${a.current_pin?'Share this PIN with eligible teachers.':a.pin_configured?'Your existing PIN still works. Save it below once to make it visible here.':'Set your election PIN below.'}</p></div>${ico('lock','xl')}</section><form id="pin-settings-form" class="tools-row"><div class="field"><label for="new-pin">${a.pin_configured?'Change shared PIN':'Set shared PIN'}</label><input class="input" id="new-pin" name="pin" type="text" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required placeholder="6–12 digits" value="${esc(a.current_pin||'')}" autocomplete="off"></div><button class="btn" type="submit">Save election PIN</button></form><div class="notice">${a.pin_configured?'An election PIN is configured. Share it with eligible teachers.':'Set a PIN before opening voting.'} Changing the PIN invalidates the previous PIN.</div>
- <div class="table-scroll"><table class="data-table"><thead><tr><th>Teacher</th><th>Eligible</th><th>Status</th><th>Submitted (Philippine time)</th><th>Action</th></tr></thead><tbody>${a.members.map(m=>`<tr><td>${esc(m.name)}</td><td><input aria-label="Eligible: ${esc(m.name)}" type="checkbox" data-field="eligible" data-member="${esc(m.id)}" ${m.eligible?'checked':''} ${m.voted?'disabled':''}></td><td>${m.voted?'Already voted':'Not yet voted'}</td><td>${m.submitted_at?esc(new Date(m.submitted_at).toLocaleString('en-PH',{timeZone:'Asia/Manila'})):'—'}</td><td>${m.voted&&m.resettable?`<button class="btn secondary small" data-action="reset-vote" data-id="${esc(m.id)}" ${a.settings.status==='certified'?'disabled':''}>Reset vote</button>`:m.voted?'Legacy ballot — cannot reset':'—'}</td></tr>`).join('')}</tbody></table></div>
- <form id="add-member-form" class="tools-row"><input class="input" name="name" placeholder="Name of new voter" required><button class="btn small">Add voter</button></form><p class="status-note">Adding a voter does not nominate them. Their voter eligibility is enabled automatically.</p><h3>Recent vote resets</h3>${(a.reset_log||[]).map(x=>`<p class="status-note"><strong>${esc(a.members.find(m=>m.id===x.details.member_id)?.name||'Member')}</strong> · ${esc(new Date(x.logged_at).toLocaleString('en-PH',{timeZone:'Asia/Manila'}))}<br>${esc(x.details.reason)}<br>Administrator: ${esc(x.admin_id)}</p>`).join('')||'<p class="status-note">No resets recorded.</p>'}</div>`;}
-function adminCandidates(){const a=ui.admin;const locked=a.ballots_count>0;const finished=['closed','certified'].includes(a.settings.status);return `<div class="card admin-card"><h2>Nominate candidates</h2><p class="status-note">The spreadsheet lists members, not nominations. Assign each candidate to the appropriate committee here. A member may be nominated for both; Board winners are automatically excluded from Audit winners.</p>
- <form id="add-candidate-form" class="tools-row"><input class="input" name="name" placeholder="Name of new candidate" required><select class="input" name="committee" required><option value="board">Board of Directors</option><option value="audit">Audit Committee</option><option value="both">Both committees</option></select><button class="btn small" type="submit">Add a candidate</button></form><div class="notice">Candidates and voters are independent. Adding a candidate does not grant voting access. To grant both roles, add the same person as a voter in Voters & access. You can also assign nominations using the switches below.</div>
- <div class="table-scroll" style="margin-top:17px"><table class="data-table"><thead><tr><th>Cooperative member</th><th>Board of Directors</th><th>Audit Committee</th></tr></thead><tbody>${a.members.map(m=>{const c=a.candidates.find(c=>c.member_id===m.id);return `<tr data-member-row="${esc(m.id)}"><td><strong>${esc(m.name)}</strong><div class="status-note">${m.eligible?'Eligible voter':'Candidate only / not registered to vote'}</div></td><td><label class="switch-wrap"><input type="checkbox" data-field="board" data-member="${esc(m.id)}" ${c?.board?'checked':''} ${finished||(locked&&c?.board)?'disabled':''}>Nominee</label></td><td><label class="switch-wrap"><input type="checkbox" data-field="audit" data-member="${esc(m.id)}" ${c?.audit?'checked':''} ${finished||(locked&&c?.audit)?'disabled':''}>Nominee</label></td></tr>`}).join('')}</tbody></table></div></div>`;}
+function adminVoters(){const a=ui.admin;const selectable=a.members.filter(m=>!m.voted);const selected=selectable.filter(m=>choice(m,'eligible')).length;
+ return `<div class="card admin-card"><h2>Voter management</h2><p>Only teachers marked <strong>Eligible</strong> may enter the ballot. Candidate nominations are managed separately.</p><section class="current-election-pin" aria-label="Current election PIN"><div><span class="tinycaps">Current election PIN</span><strong class="pin-digits">${a.current_pin?esc(a.current_pin):'Not available yet'}</strong><p>${a.current_pin?'Share this PIN with eligible teachers.':a.pin_configured?'Your existing PIN still works. Save it below once to make it visible here.':'Set your election PIN below.'}</p></div>${ico('lock','xl')}</section><form id="pin-settings-form" class="tools-row"><div class="field"><label for="new-pin">${a.pin_configured?'Change shared PIN':'Set shared PIN'}</label><input class="input" id="new-pin" name="pin" type="text" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required placeholder="6–12 digits" value="${esc(a.current_pin||'')}" autocomplete="off"></div><button class="btn" type="submit">Save election PIN</button></form><div class="notice">${a.pin_configured?'An election PIN is configured. Share it with eligible teachers.':'Set a PIN before opening voting.'} Changing the PIN invalidates the previous PIN.</div>
+ <div class="list-heading"><h3>Voter eligibility</h3><span class="tag wine">${selected} of ${selectable.length} selected</span></div>
+ ${queueNotice('voters')}
+ <div class="bulk-bar"><button type="button" class="btn secondary small" data-action="select-all" data-field="eligible">${ico('check')} Select all eligible</button><button type="button" class="btn ghost small" data-action="clear-all" data-field="eligible">Clear selection</button><span>Only unchecked / not-yet-voted members can be changed.</span></div>
+ <div class="table-scroll"><table class="data-table"><thead><tr><th>Teacher</th><th><label class="select-all-label"><input type="checkbox" data-select-all="eligible" aria-label="Select all eligible voters" ${selectable.length&&selected===selectable.length?'checked':''}> Eligible to vote</label></th><th>Status</th><th>Submitted (Philippine time)</th><th>Action</th></tr></thead><tbody>${a.members.map(m=>`<tr class="${Object.hasOwn(ui.pending.eligible,m.id)?'row-pending':''}"><td><strong>${esc(m.name)}</strong>${Object.hasOwn(ui.pending.eligible,m.id)?'<div class="pending-indicator">Unsaved change</div>':''}</td><td><label class="switch-wrap"><input aria-label="Eligible to vote: ${esc(m.name)}" type="checkbox" data-field="eligible" data-member="${esc(m.id)}" ${choice(m,'eligible')?'checked':''} ${m.voted?'disabled':''}> ${m.voted?'Locked':'Select'}</label></td><td>${m.voted?'Already voted':'Not yet voted'}</td><td>${m.submitted_at?esc(new Date(m.submitted_at).toLocaleString('en-PH',{timeZone:'Asia/Manila'})):'—'}</td><td>${m.voted&&m.resettable?`<button class="btn secondary small" data-action="reset-vote" data-id="${esc(m.id)}" ${a.settings.status==='certified'?'disabled':''}>Reset vote</button>`:m.voted?'Legacy ballot — cannot reset':'—'}</td></tr>`).join('')}</tbody></table></div>
+ <form id="add-member-form" class="tools-row add-queue-form"><input class="input" name="name" placeholder="Name of new voter" required minlength="3"><button class="btn secondary small" type="submit">${ico('users')} Queue new voter</button></form><p class="status-note">Queueing a voter does not nominate them for either committee. New voters become eligible only after you click Save voters.</p>${queuedNames('voters')}${draftActions('voters')}
+ <h3>Recent vote resets</h3>${(a.reset_log||[]).map(x=>`<p class="status-note"><strong>${esc(a.members.find(m=>m.id===x.details.member_id)?.name||'Member')}</strong> · ${esc(new Date(x.logged_at).toLocaleString('en-PH',{timeZone:'Asia/Manila'}))}<br>${esc(x.details.reason)}<br>Administrator: ${esc(x.admin_id)}</p>`).join('')||'<p class="status-note">No resets recorded.</p>'}</div>`;}
+function adminCandidates(){const a=ui.admin;const locked=a.ballots_count>0;const finished=['closed','certified'].includes(a.settings.status);const eligible=a.members.filter(m=>!finished);
+ const totalBoard=a.members.filter(m=>choice(m,'board')).length,totalAudit=a.members.filter(m=>choice(m,'audit')).length;
+ return `<div class="card admin-card"><h2>Nominate candidates</h2><p class="status-note">Select nominees for each committee. <strong>Nomination does not grant voting eligibility.</strong> Board winners are automatically excluded from Audit winners.</p>
+ <form id="add-candidate-form" class="tools-row add-queue-form"><input class="input" name="name" placeholder="Name of new candidate" required minlength="3"><select class="input" name="committee" required><option value="board">Board of Directors</option><option value="audit">Audit Committee</option><option value="both">Both committees</option></select><button class="btn secondary small" type="submit" ${finished?'disabled':''}>${ico('users')} Queue candidate</button></form><div class="notice">A person can be a voter, a candidate, or both — but the roles are registered separately. Queueing or selecting here will not change voter eligibility.</div>
+ <div class="list-heading"><h3>Candidate selection</h3><span class="tag wine">Board: ${totalBoard} · Audit: ${totalAudit}</span></div>${queueNotice('candidates')}
+ <div class="bulk-bar"><span class="bulk-heading">Board of Directors</span><button class="btn secondary small" data-action="select-all" data-field="board" ${finished?'disabled':''}>Select all</button><button class="btn ghost small" data-action="clear-all" data-field="board" ${finished?'disabled':''}>Clear</button><span class="bulk-heading">Audit Committee</span><button class="btn secondary small" data-action="select-all" data-field="audit" ${finished?'disabled':''}>Select all</button><button class="btn ghost small" data-action="clear-all" data-field="audit" ${finished?'disabled':''}>Clear</button></div>
+ <div class="table-scroll" style="margin-top:17px"><table class="data-table"><thead><tr><th>Cooperative member</th><th><label class="select-all-label"><input type="checkbox" data-select-all="board" aria-label="Select all Board nominees" ${!finished&&a.members.filter(m=>!(locked&&baseChoice(m,'board'))).every(m=>choice(m,'board'))?'checked':''} ${finished?'disabled':''}> Board of Directors</label></th><th><label class="select-all-label"><input type="checkbox" data-select-all="audit" aria-label="Select all Audit nominees" ${!finished&&a.members.filter(m=>!(locked&&baseChoice(m,'audit'))).every(m=>choice(m,'audit'))?'checked':''} ${finished?'disabled':''}> Audit Committee</label></th></tr></thead><tbody>${a.members.map(m=>{const pending=Object.hasOwn(ui.pending.board,m.id)||Object.hasOwn(ui.pending.audit,m.id);return `<tr data-member-row="${esc(m.id)}" class="${pending?'row-pending':''}"><td><strong>${esc(m.name)}</strong><div class="status-note">${m.eligible?'Eligible voter':'Candidate only / not registered to vote'}</div>${pending?'<div class="pending-indicator">Unsaved change</div>':''}</td><td><label class="switch-wrap"><input type="checkbox" data-field="board" data-member="${esc(m.id)}" ${choice(m,'board')?'checked':''} ${finished||(locked&&baseChoice(m,'board'))?'disabled':''}> Nominee</label></td><td><label class="switch-wrap"><input type="checkbox" data-field="audit" data-member="${esc(m.id)}" ${choice(m,'audit')?'checked':''} ${finished||(locked&&baseChoice(m,'audit'))?'disabled':''}> Nominee</label></td></tr>`}).join('')}</tbody></table></div>${queuedNames('candidates')}${draftActions('candidates')}</div>`;}
 function resultsSummary(){const r=ui.admin.results;const b=r?.board?.winner_ids.length||0;const a=r?.audit?.winner_ids.length||0;return `<div class="metrics">${metric('BOARD SEATS',b+'/5','Provisional directors','crown')}${metric('AUDIT SEATS',a+'/3','Provisional auditors','shield')}${metric('BALLOTS COUNTED',ui.admin.ballots_count,'Anonymous ballots','vote')}${metric('RESULT STATUS',ui.admin.settings.status.toUpperCase(),'Official on certification','lock')}</div>`;}
 function rankSection(body){const result=ui.admin.results?.[body];if(!result)return `<div class="card admin-card"><h2>${label(body)}</h2><div class="admin-empty">Awaiting final Board allocation or election closure.</div></div>`;
  const max=Math.max(1,...result.rows.map(r=>r.votes));const status={elected:'Elected',board_winner:'Elected to Board — skipped',tie_pending:'Tie — resolution required',not_elected:'Not elected'};
@@ -179,11 +268,40 @@ async function clickAction(e){if(ui.loading||['preparing','casting'].includes(ui
   return;
  }
  if(action==='reset-vote'&&adminAllowed()){ui.modal={type:'reset-vote',member_id:el.dataset.id};render();return;}
+ if(action==='select-all'||action==='clear-all'){
+  if(!adminAllowed())return;
+  const field=el.dataset.field;
+  if(!['eligible','board','audit'].includes(field))return;
+  const next=action==='select-all';
+  const finished=['closed','certified'].includes(ui.admin.settings.status);
+  for(const m of ui.admin.members){
+    if(field==='eligible'&&m.voted)continue;
+    if(field!=='eligible'&&(finished||(ui.admin.ballots_count>0&&baseChoice(m,field))))continue;
+    draftChoice(m,field,next);
+  }
+  render();return;
+ }
+ if(action==='discard-drafts'&&adminAllowed()){
+  const panel=el.dataset.panel;
+  if(panel==='voters'){ui.pending.eligible={};ui.pending.voters=[];}
+  if(panel==='candidates'){ui.pending.board={};ui.pending.audit={};ui.pending.candidates=[];}
+  render();return;
+ }
+ if(action==='remove-queued'&&adminAllowed()){
+  const panel=el.dataset.panel,idx=Number(el.dataset.index);
+  if(['voters','candidates'].includes(panel)&&Number.isInteger(idx))ui.pending[panel].splice(idx,1);
+  render();return;
+ }
+ if(action==='save-drafts'&&adminAllowed()){
+  const panel=el.dataset.panel;
+  if(['voters','candidates'].includes(panel)&&dirtyCount(panel))await run(()=>saveDrafts(panel),el);
+  return;
+ }
  await run(async()=>{
  if(action==='retry-connection'){ui.error='';ui.snapshot=null;render();await getSnapshot();render();}
  if(action==='refresh-voters'){ui.voterOptions=(await api.voterList(ui.pin)).members;}
  if(action==='public-results'){ui.publishedResults=await api.publicResults();setScreen('public-results');}
- if(action==='logout'){await api.logout();ui.admin=null;setScreen('home')}
+ if(action==='logout'){await api.logout();ui.admin=null;ui.pending={eligible:{},board:{},audit:{},voters:[],candidates:[]};setScreen('home')}
  if(action==='submit-final'){
    validateBallot();ui.modal={type:'casting'};render();
    let result;
@@ -199,7 +317,7 @@ async function clickAction(e){if(ui.loading||['preparing','casting'].includes(ui
  if(action==='export-results')exportResults();
  if(action==='download-results-png')await downloadResultsPng();
  if(action==='print-results')printResults();
- });
+ },el);
 }
 async function handleSubmit(e){const form=e.target;if(!['pin-form','pin-settings-form','reset-vote-form','voter-form','admin-login-form','add-member-form','add-candidate-form','settings-form','tie-form'].includes(form.id))return;e.preventDefault();await run(async()=>{
  const fd=new FormData(form);
@@ -209,16 +327,33 @@ async function handleSubmit(e){const form=e.target;if(!['pin-form','pin-settings
  if(form.id==='reset-vote-form'){await api.admin('reset_vote',{member_id:ui.modal.member_id,reason:String(fd.get('reason')||'').trim()});ui.modal=null;await getAdmin();await getSnapshot();showToast('Previous ballot removed. Teacher may vote again while voting is open.','ok');}
 
  if(form.id==='admin-login-form'){await api.login(String(fd.get('email')),String(fd.get('password')));await getAdmin();ui.adminTab='overview';setScreen('admin')}
- if(form.id==='add-member-form'){await api.admin('add_member',{name:String(fd.get('name')).trim(),role:'voter'});await getAdmin();showToast('Voter added without candidate nomination.','ok')}
- if(form.id==='add-candidate-form'){await api.admin('add_member',{name:String(fd.get('name')).trim(),role:'candidate',committee:String(fd.get('committee'))});await getAdmin();showToast('Candidate added without voter eligibility.','ok')}
+ if(form.id==='add-member-form'){queueMember(fd.get('name'),'voters');}
+ if(form.id==='add-candidate-form'){queueMember(fd.get('name'),'candidates',String(fd.get('committee')));}
  if(form.id==='settings-form'){const payload={status:String(fd.get('status')),allow_partial:String(fd.get('allow_partial'))==='true',starts_at:fd.get('starts_at')?new Date(String(fd.get('starts_at'))).toISOString():null,ends_at:fd.get('ends_at')?new Date(String(fd.get('ends_at'))).toISOString():null,results_published:fd.get('results_published')==='on'};await api.admin('update_settings',payload);await getAdmin();await getSnapshot();showToast('Election settings saved.','ok')}
  if(form.id==='tie-form'){const body=form.dataset.body,votes=Number(form.dataset.votes);const selections=fd.getAll('tie').map(String);const group=ui.admin.results?.[body]?.pending.find(g=>g.votes===votes);if(!group||selections.length!==group.available)throw Error(`Select exactly ${group?.available||0} winner(s) to resolve this tie.`);await api.admin('set_tie',{committee:body,vote_count:votes,winner_ids:selections,notes:String(fd.get('notes')||'')});ui.modal=null;await getAdmin();showToast('Tie resolution recorded.','ok')}
- });}
-async function handleChange(e){const el=e.target;if(!el.dataset.field)return;const field=el.dataset.field;const member=el.dataset.member;if(!adminAllowed())return;await run(async()=>{
- if(field==='eligible'){await api.admin('set_member',{member_id:member,eligible:el.checked})}
- if(field==='board'||field==='audit'){const row=el.closest('tr');await api.admin('set_candidate',{member_id:member,board:!!row.querySelector('[data-field="board"]')?.checked,audit:!!row.querySelector('[data-field="audit"]')?.checked})}
- await getAdmin();await getSnapshot();showToast('Changes saved.','ok')
- });}
+ },form.querySelector('[type="submit"]'));}
+function handleChange(e){
+ if(ui.loading)return;
+ const el=e.target;
+ if(el.dataset.selectAll){
+  if(!adminAllowed())return;
+  const field=el.dataset.selectAll;
+  if(!['eligible','board','audit'].includes(field))return;
+  const finished=['closed','certified'].includes(ui.admin.settings.status);
+  for(const m of ui.admin.members){
+   if(field==='eligible'&&m.voted)continue;
+   if(field!=='eligible'&&(finished||(ui.admin.ballots_count>0&&baseChoice(m,field))))continue;
+   draftChoice(m,field,el.checked);
+  }
+  render();return;
+ }
+ const field=el.dataset.field,member=el.dataset.member;
+ if(!field||!adminAllowed()||!['eligible','board','audit'].includes(field))return;
+ const m=ui.admin.members.find(m=>m.id===member);
+ if(!m||el.disabled)return;
+ draftChoice(m,field,el.checked);
+ render();
+}
 function handleInput(e){const body=e.target.dataset.search;if(!body)return;const pos=e.target.selectionStart;ui.search[body]=e.target.value;render();const replacement=document.querySelector(`[data-search="${body}"]`);if(replacement){replacement.focus();replacement.setSelectionRange(pos,pos);}}
 document.addEventListener('click',clickAction);document.addEventListener('submit',handleSubmit);document.addEventListener('change',handleChange);document.addEventListener('input',handleInput);document.addEventListener('keydown',e=>{if(e.key==='Escape'&&ui.modal&&!['casting','preparing'].includes(ui.modal.type)){ui.modal=null;render()}});
 if(isConfigured){getSnapshot().then(()=>render()).catch(e=>{ui.error=e.message;render();showToast('Unable to load election data: '+e.message,'error')});}else{render();}
