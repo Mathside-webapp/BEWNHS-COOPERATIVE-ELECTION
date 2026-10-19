@@ -5,7 +5,7 @@
  * Double-clicking index.html always starts a safe, local DEMO.
  */
 window.BEWNHSElectionConfig = {
-  SUPABASE_URL: 'https://tzyibiwitxkbxpnoctky.supabase.co',
+  SUPABASE_URL: 'https://tzyibiwitxkbxpnoctky.supabase.co/',
   SUPABASE_ANON_KEY: 'sb_publishable_P7_M-BoJ_KgS5faLjgELyA_IrmtnKV9',
   FUNCTION_NAME: 'election-api'
 };
