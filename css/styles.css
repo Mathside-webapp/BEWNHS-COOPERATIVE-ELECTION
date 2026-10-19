@@ -142,3 +142,23 @@
 .action-spinner{display:inline-block;width:17px;height:17px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
 .btn[aria-busy=true]{opacity:1!important;cursor:wait}.btn:disabled[aria-busy=true]{opacity:1}
 @media(max-width:600px){.draft-actions>.btn{flex:1;min-width:120px}.list-heading{align-items:flex-start;flex-direction:column}.add-queue-form>.input,.add-queue-form>select{max-width:none!important;flex:1 1 180px}.bulk-bar .btn{padding:9px 12px}}
+
+
+/* Election ballot: mobile-only, expandable officer responsibilities. */
+.responsibility-toggle{display:none}
+@media (max-width:760px){
+ .responsibility-card{padding:18px!important}
+ .responsibility-card .role-heading{gap:11px}
+ .responsibility-card .role-heading h2{font-size:20px;line-height:1.25}
+ .responsibility-card .role-icon{flex:none}
+ .responsibility-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:48px;padding:11px 14px;margin-top:15px;border:1px solid #ead4d9;border-radius:12px;background:#fff8f7;color:var(--wine);font:700 13px 'DM Sans',sans-serif;text-align:left;cursor:pointer}
+ .responsibility-toggle:focus-visible{outline:3px solid #c69a49;outline-offset:3px}
+ .responsibility-toggle-right{display:inline-flex;align-items:center;gap:8px;flex:none;font-size:11px;white-space:nowrap;color:#8d6d70}
+ .responsibility-toggle-right .icon{width:17px;height:17px;transform:rotate(90deg);transition:transform .2s ease}
+ .responsibility-card[data-expanded="true"] .responsibility-toggle{background:#f9ebef}
+ .responsibility-card[data-expanded="true"] .responsibility-toggle-right .icon{transform:rotate(-90deg)}
+ .responsibility-card[data-expanded="false"] .responsibility-details{display:none}
+ .responsibility-card[data-expanded="true"] .responsibility-details{display:block}
+ .responsibility-card .responsibility-details .role-copy{margin-top:18px}
+}
+@media (prefers-reduced-motion:reduce){.responsibility-toggle-right .icon{transition:none}}
