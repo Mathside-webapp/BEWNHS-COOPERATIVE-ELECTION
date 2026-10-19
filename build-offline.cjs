@@ -1,12 +1,12 @@
 /**
- * Dependency-free build of the BEWNHS frontend into a classic browser script.
+ * Dependency-free build of the BEWNHS live frontend into a classic browser script.
  * A classic script is intentional: browsers block ES module imports from file://.
  * Use `node build-offline.cjs` after making changes to the source modules.
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const root = __dirname;
-const sequence = ['config.js', 'content.js', 'results.js', 'demo.js', 'api.js', 'app.js'];
+const sequence = ['config.js', 'content.js', 'results.js', 'api.js', 'app.js'];
 const imports = /^\s*import\s+\{[^}]+\}\s+from\s+['"]\.\/[a-z-]+\.js['"];?\s*$/gm;
 const exportDecls = /^export\s+(?=(?:const|let|var|function|async\s+function|class)\b)/gm;
 const sources = sequence.map(name => {

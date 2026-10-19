@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
-// Local file previews always stay in DEMO MODE; real voting requires an HTTPS host.
-export const isConfigured=location.protocol!=='file:' && Boolean(CONFIG.SUPABASE_URL.trim() && CONFIG.SUPABASE_ANON_KEY.trim());
+// A live election requires a hosted page and valid public Supabase settings.
+export const isConfigured=location.protocol!=='file:' && /^https:\/\/[^\s/]+\.supabase\.co\/?$/i.test(CONFIG.SUPABASE_URL.trim()) && Boolean(CONFIG.SUPABASE_ANON_KEY.trim());
 export class LiveAPI {
   constructor(){this.mode='live';this.token=sessionStorage.getItem('bewnhs_admin_token')||'';}
   get root(){return CONFIG.SUPABASE_URL.replace(/\/$/,'');}

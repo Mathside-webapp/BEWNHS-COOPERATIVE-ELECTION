@@ -5,7 +5,7 @@
 // ===== SOURCE: js/config.js =====
 /**
  * Set these public values after deploying Supabase. Never place your service_role key here.
- * With both values empty, the website offers the fully interactive OFFLINE DEMO only.
+ * Values must be set to enable the live election. There is no demo fallback.
  */
 const CONFIG = {
   SUPABASE_URL: '', // e.g. 'https://your-project.supabase.co'
@@ -126,107 +126,10 @@ function calculateResults(boardCandidates, auditCandidates, votes, tieBreaks=[])
 }
 
 
-// ===== SOURCE: js/demo.js =====
-
-
-const STORE_KEY='bewnhs_election_demo_shared_v1';
-const DEMO_CODE='202610';
-const clone = obj => JSON.parse(JSON.stringify(obj));
-function starter() {
-  const members=MEMBERS.map((name,i)=>({id:`member-${i+1}`,name,eligible:true,voted:i<18,generation:0,submitted_at:i<18?new Date().toISOString():null,resettable:i<18}));
-  const candidates=members.map(m=>({id:`candidate-${m.id}`,member_id:m.id,name:m.name,board:true,audit:true,active:true}));
-  const ballots=[];
-  for(let i=0;i<18;i++) {
-    // Deliberate, non-random sample showing Board priority and Audit promotion.
-    const board = i<10?[0,1,2,3,4]:i<14?[0,1,2,3,5]:[0,1,2,4,6];
-    const audit = i<7?[0,1,8]:i<11?[0,8,9]:i<14?[1,9,10]:i<16?[8,9,10]:[8,10,11];
-    ballots.push({member_id:members[i].id,board:board.map(n=>candidates[n].id),audit:audit.map(n=>candidates[n].id)});
-  }
-  return {pin:DEMO_CODE,reset_log:[],settings:{status:'open',title:'BEWNHS Cooperative Election',starts_at:null,ends_at:null,allow_partial:false,results_published:false},members,candidates,ballots,tie_breaks:[],demo_voted:false};
-}
-class DemoAPI {
-  constructor(){this.mode='demo';this.state=this.load();}
-  load(){try {const old=JSON.parse(localStorage.getItem(STORE_KEY)); if(old && old.members?.length>0 && old.ballots) return old;}catch(_){}if(this.state)return this.state;const s=starter();this.save(s);return s;}
-  save(s=this.state){
-    // Some privacy-focused browsers deny localStorage on file:// pages.
-    // The demo remains usable in memory, even when persistence is unavailable.
-    try { localStorage.setItem(STORE_KEY,JSON.stringify(s)); } catch (_) {}
-  }
-  reset(){this.state=starter();this.save();}
-  async snapshot(){return {settings:clone(this.state.settings),candidates:clone(this.state.candidates.filter(c=>c.active))};}
-  refresh(){this.state=this.load();}
-  checkPin(pin){if(pin!==this.state.pin)throw Error('Incorrect election PIN');const s=this.state.settings;if(s.status!=='open'||(s.starts_at&&Date.now()<Date.parse(s.starts_at))||(s.ends_at&&Date.now()>=Date.parse(s.ends_at)))throw Error('Voting is not currently open');}
-  async voterList(pin){this.refresh();this.checkPin(pin);return {members:clone(this.state.members.filter(m=>m.eligible&&!m.voted).map(m=>({id:m.id,name:m.name,generation:m.generation||0})))};}
-  async verify(pin,member_id,generation){this.refresh();this.checkPin(pin);const m=this.state.members.find(m=>m.id===member_id);if(!m||!m.eligible||m.voted)throw Error('This member has already voted or is not eligible');if((m.generation||0)!==generation)throw Error('Entry expired. Refresh the names');return {display_name:m.name,verified:true};}
-  async vote({pin,member_id,generation,board,audit}) {
-    await this.verify(pin,member_id,generation);
-    this.refresh();const member=this.state.members.find(m=>m.id===member_id);if(member.voted)throw Error('This member has already voted');
-    const s=this.state.settings;
-    if(!s.allow_partial && (board.length!==5 || audit.length!==3)) throw Error('Please choose five Board and three Audit candidates.');
-    if(board.length>5 || audit.length>3 || new Set(board).size!==board.length || new Set(audit).size!==audit.length) throw Error('Invalid selection count or duplicate candidates.');
-    for(const [ids,body] of [[board,'board'],[audit,'audit']]) if(ids.some(id=>!this.state.candidates.some(c=>c.id===id && c.active && c[body]))) throw Error('One or more candidates are no longer eligible.');
-    this.state.ballots.push({member_id,board:clone(board),audit:clone(audit)});
-    member.voted=true;member.submitted_at=new Date().toISOString();member.resettable=true;
-    this.save();
-    return {reference:'DEMO-'+Math.random().toString(36).slice(2,10).toUpperCase()};
-  }
-  async publicResults(){if(this.state.settings.status!=='certified'||!this.state.settings.results_published)throw Error('Results have not been officially published in this demo.');return {settings:clone(this.state.settings),results:calculateResults(this.state.candidates.filter(c=>c.active&&c.board),this.state.candidates.filter(c=>c.active&&c.audit),this.state.ballots,this.state.tie_breaks)};}
-  async login(){return {demo:true};}
-  async logout(){}
-  async admin(action,payload={}) {
-    this.refresh();const s=this.state;
-    if(action==='overview') {
-      const results=calculateResults(s.candidates.filter(c=>c.active && c.board),s.candidates.filter(c=>c.active && c.audit),s.ballots,s.tie_breaks);
-      const resultAllowed=['closed','certified'].includes(s.settings.status);
-      return {pin_configured:true,current_pin:s.pin,reset_log:clone(s.reset_log),settings:clone(s.settings),members:clone(s.members),candidates:clone(s.candidates),ballots_count:s.ballots.length,eligible_count:s.members.filter(m=>m.eligible).length,voted_count:s.members.filter(m=>m.voted).length,results:resultAllowed?results:null,tie_breaks:clone(s.tie_breaks)};
-    }
-    if(action==='set_candidate') {
-      if(['closed','certified'].includes(s.settings.status))throw Error('Election is closed');
-      let c=s.candidates.find(c=>c.member_id===payload.member_id);if(!c){const m=s.members.find(m=>m.id===payload.member_id);if(!m)throw Error('Person not found.');c={id:'candidate-'+m.id,member_id:m.id,name:m.name,board:false,audit:false,active:true};s.candidates.push(c);}
-      if(s.ballots.length&&((c.board&&!payload.board)||(c.audit&&!payload.audit)))throw Error('Existing nominations cannot be removed after voting begins');
-      c.board=!!payload.board;c.audit=!!payload.audit;this.save();return {ok:true};
-    }
-    if(action==='set_member') {
-      const m=s.members.find(m=>m.id===payload.member_id);if(!m)throw Error('Member not found.');
-      if(m.voted) throw Error('Cannot change eligibility after a ballot has been cast.');
-      m.eligible=!!payload.eligible;this.save();return {ok:true};
-    }
-    if(action==='add_member') {
-      if(['closed','certified'].includes(s.settings.status))throw Error('Election is closed');
-      const name=String(payload.name||'').trim();if(!name)throw Error('Enter a valid name.');
-      const role=payload.role||'voter';const committee=payload.committee||'board';let m=s.members.find(m=>m.name.toLowerCase()===name.toLowerCase());
-      if(!m){const id='member-'+crypto.randomUUID();m={id,name,eligible:role==='voter',voted:false,has_code:false};s.members.push(m);}
-      else if(role==='voter'&&!m.eligible)m.eligible=true;
-      else if(role==='voter')throw Error('Already registered to vote');
-      if(role==='candidate'){let c=s.candidates.find(c=>c.member_id===m.id);if(!c){c={id:'candidate-'+m.id,member_id:m.id,name,board:false,audit:false,active:true};s.candidates.push(c);}c.board ||= committee==='board'||committee==='both';c.audit ||= committee==='audit'||committee==='both';}
-      this.save();return {ok:true};
-    }
-    if(action==='set_pin'){if(!/^[0-9]{6,12}$/.test(payload.pin))throw Error('Use a 6 to 12 digit PIN');s.pin=payload.pin;this.save();return {ok:true};}
-    if(action==='reset_vote'){const m=s.members.find(m=>m.id===payload.member_id);if(!m?.voted||!m.resettable)throw Error('No resettable ballot');if(s.settings.status==='certified')throw Error('Certified results cannot be reset');if((payload.reason||'').trim().length<5||payload.reason.length>1000)throw Error('Provide a reason (5 to 1000 characters)');s.ballots=s.ballots.filter(b=>b.member_id!==m.id);m.voted=false;m.submitted_at=null;m.resettable=false;m.generation=(m.generation||0)+1;s.tie_breaks=[];s.settings.results_published=false;if(s.settings.status==='closed')s.settings.status='paused';s.reset_log.unshift({admin_id:'Demo administrator',logged_at:new Date().toISOString(),details:{member_id:m.id,reason:payload.reason.trim()}});this.save();return {ok:true};}
-    if(action==='update_settings') {
-      const next=payload.status || s.settings.status;
-      if(!['draft','open','paused','closed','certified'].includes(next))throw Error('Invalid status.');
-      if(next==='certified'){
-        const results=calculateResults(s.candidates.filter(c=>c.active && c.board),s.candidates.filter(c=>c.active && c.audit),s.ballots,s.tie_breaks);
-        if(results.board.pending.length || results.board.shortage || !results.audit || results.audit.pending.length || results.audit.shortage) throw Error('Resolve ties and ensure every seat is filled before certification.');
-      }
-      s.settings={...s.settings,...payload};this.save();return {ok:true};
-    }
-    if(action==='set_tie') {
-      s.tie_breaks=s.tie_breaks.filter(t=>!(t.committee===payload.committee && t.vote_count===payload.vote_count));
-      s.tie_breaks.push({committee:payload.committee,vote_count:Number(payload.vote_count),winner_ids:payload.winner_ids,notes:payload.notes||'Resolved by election committee'});this.save();return {ok:true};
-    }
-    if(action==='reset_demo'){this.reset();return {ok:true};}
-    throw Error('Demo action not available: '+action);
-  }
-}
-const DEMO_ACCESS_CODE=DEMO_CODE;
-
-
 // ===== SOURCE: js/api.js =====
 
-// Local file previews always stay in DEMO MODE; real voting requires an HTTPS host.
-const isConfigured=location.protocol!=='file:' && Boolean(CONFIG.SUPABASE_URL.trim() && CONFIG.SUPABASE_ANON_KEY.trim());
+// A live election requires a hosted page and valid public Supabase settings.
+const isConfigured=location.protocol!=='file:' && /^https:\/\/[^\s/]+\.supabase\.co\/?$/i.test(CONFIG.SUPABASE_URL.trim()) && Boolean(CONFIG.SUPABASE_ANON_KEY.trim());
 class LiveAPI {
   constructor(){this.mode='live';this.token=sessionStorage.getItem('bewnhs_admin_token')||'';}
   get root(){return CONFIG.SUPABASE_URL.replace(/\/$/,'');}
@@ -262,7 +165,6 @@ class LiveAPI {
 
 
 
-
 const $app=document.getElementById('app');
 const toastRoot=document.getElementById('toast');
 const assets={seal:'./assets/bewnhs-school-seal.png'};
@@ -287,14 +189,14 @@ const icons={
 const ico=(name,cls='')=>`<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]||icons.info}</svg>`;
 const esc=(val='')=>String(val??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const nice=(s='')=>String(s).replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
-let api=isConfigured?new LiveAPI():new DemoAPI();
-const ui={screen:'home',ballotTab:'board',snapshot:null,admin:null,adminTab:'overview',code:api.mode==='demo'?DEMO_ACCESS_CODE:'',voter:'',pin:'',member_id:'',generation:0,voterOptions:null,picked:{board:[],audit:[]},search:{board:'',audit:''},modal:null,loading:false,generatedCodes:null,publishedResults:null,error:''};
+const api=new LiveAPI();
+const ui={screen:'home',ballotTab:'board',snapshot:null,admin:null,adminTab:'overview',code:'',voter:'',pin:'',member_id:'',generation:0,voterOptions:null,picked:{board:[],audit:[]},search:{board:'',audit:''},modal:null,loading:false,generatedCodes:null,publishedResults:null,error:''};
 
 function showToast(message,type='') {
  const el=document.createElement('div');el.className='toast '+type;el.textContent=message;toastRoot.appendChild(el);setTimeout(()=>el.remove(),4600);
 }
 async function run(fn){if(ui.loading)return;ui.loading=true;try{await fn()}catch(e){showToast(e.message||String(e),'error')}finally{ui.loading=false;render()}}
-async function getSnapshot(){ui.snapshot=await api.snapshot();}
+async function getSnapshot(){ui.snapshot=await api.snapshot();ui.error='';}
 async function getAdmin(){ui.admin=await api.admin('overview');}
 function setScreen(screen){ui.screen=screen;ui.modal=null;render();window.scrollTo({top:0,behavior:'instant'});}
 function label(body){return ROLES[body].label;}
@@ -304,19 +206,18 @@ function head(){
  return `<header class="topbar"><div class="shell topbar-inner">
    <a class="brand" href="#home" data-action="home"><span><span class="brand-title">BEWNHS Cooperative</span><span class="brand-sub" style="display:block">Election Portal</span></span></a>
    <div class="top-actions">
-    <span class="tag ${api.mode==='demo'?'demo':'green'}">${api.mode==='demo'?'◆ DEMO MODE':'● OFFICIAL PORTAL'}</span>
+    <span class="tag ${isConfigured?'green':'wine'}">${isConfigured?'● OFFICIAL PORTAL':'● SETUP REQUIRED'}</span>
     ${ui.screen==='home'?`<button class="btn secondary small desktop-only" data-action="admin-enter">${ico('lock')} Admin Portal</button>`:''}
     ${admin?`<button class="btn ghost small" data-action="logout">${ico('logout')} Exit admin</button>`:''}
-    ${isConfigured?`<button class="btn ghost small desktop-only" data-action="change-mode">${api.mode==='live'?'Try demo':'Use live site'}</button>`:''}
    </div></div></header>`;
 }
 function footer(){return `<footer class="footer"><div class="shell footer-inner"><div>© ${new Date().getFullYear()} BEWNHS Cooperative · Shared PIN edition</div><div class="footer-links"><span>Integrity in every vote</span><button class="mini-link" data-action="admin-enter">Administrator access</button></div></div></footer>`;}
-function home(){const isDemo=api.mode==='demo';const s=ui.snapshot?.settings||{};
+function home(){const s=ui.snapshot?.settings||{};
  return `<main><div class="shell hero-wrap"><section class="hero">
   <div class="hero-content"><div class="eyebrow">OFFICIAL COOPERATIVE ELECTION</div><h1>Every voice.<br>Every vote.<br><em>A stronger tomorrow.</em></h1>
    <p class="hero-copy">Shape the future of our cooperative. Choose leaders who will uphold service, integrity, and shared progress for our school community.</p>
    <div class="hero-buttons"><button class="btn gold big" data-action="start">CAST VOTE ${ico('arrow')}</button>${s.status==='certified'&&s.results_published?`<button class="btn secondary big" data-action="public-results">View official results ${ico('arrow')}</button>`:''}</div>
-   <div style="margin-top:31px;font-size:11px;letter-spacing:.06em;color:#e4bdc9">${isDemo?'INTERACTIVE DEMONSTRATION · NOT AN OFFICIAL ELECTION':`ELECTION STATUS: ${esc((s.status||'draft').toUpperCase())}`}</div>
+   <div style="margin-top:31px;font-size:11px;letter-spacing:.06em;color:#e4bdc9">ELECTION STATUS: ${esc((s.status||'draft').toUpperCase())}</div>
   </div>
   <div class="hero-right"><div class="seal-stage"><img class="hero-school-logo" src="${assets.seal}" alt="Official Bagumbayan-East Washington National High School seal"></div></div>
   </section><div class="hero-strip">
@@ -326,7 +227,7 @@ function home(){const isDemo=api.mode==='demo';const s=ui.snapshot?.settings||{}
   </div></div><div class="section-intro shell"><div class="tinycaps">Service · Leadership · Accountability</div><h2>Choose with confidence.</h2><p>Review each committee's official responsibilities as you select your preferred candidates. Your participation helps strengthen the entire cooperative.</p></div></main>`;
 }
 function verifyView(){return `<div class="center-shell"><div class="auth-card"><div class="tinycaps" style="color:var(--wine)">Member voting entrance</div><h1>${ui.voterOptions?'Select your name':'Enter election PIN'}</h1><p>${ui.voterOptions?'Only eligible teachers who have not voted appear below. Select your own name.':'Use the shared PIN provided by your Election Committee.'}</p>
- ${!ui.voterOptions?`<form id="pin-form"><div class="field"><label for="election-pin">Election PIN</label><input class="input" id="election-pin" name="pin" type="text" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required autocomplete="off" value="${api.mode==='demo'?DEMO_ACCESS_CODE:''}"><button type="button" class="mini-link" data-action="toggle-pin" data-target="election-pin">Hide PIN</button></div>${api.mode==='demo'?`<div class="notice">Demo PIN: <strong>${DEMO_ACCESS_CODE}</strong> (unless changed in demo admin)</div>`:''}<button class="btn full" type="submit">Continue ${ico('arrow')}</button></form>`:`<form id="voter-form"><div class="field"><label for="voter-name">Your name</label><select class="input" id="voter-name" name="member_id" required><option value="">Select your name</option>${ui.voterOptions.map(m=>`<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></div>${!ui.voterOptions.length?'<div class="notice">No eligible voters remain. Contact the administrator if you have not voted.</div>':''}<p class="status-note">Name missing? It may be marked as already voted or not eligible. Ask the administrator to check.</p><button class="btn full" type="submit" ${ui.voterOptions.length?'':'disabled'}>Enter my ballot ${ico('arrow')}</button></form><button class="btn secondary full" style="margin-top:12px" data-action="refresh-voters">Refresh names</button>`}
+ ${!ui.voterOptions?`<form id="pin-form"><div class="field"><label for="election-pin">Election PIN</label><input class="input" id="election-pin" name="pin" type="text" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required autocomplete="off" value=""><button type="button" class="mini-link" data-action="toggle-pin" data-target="election-pin">Hide PIN</button></div><button class="btn full" type="submit">Continue ${ico('arrow')}</button></form>`:`<form id="voter-form"><div class="field"><label for="voter-name">Your name</label><select class="input" id="voter-name" name="member_id" required><option value="">Select your name</option>${ui.voterOptions.map(m=>`<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></div>${!ui.voterOptions.length?'<div class="notice">No eligible voters remain. Contact the administrator if you have not voted.</div>':''}<p class="status-note">Name missing? It may be marked as already voted or not eligible. Ask the administrator to check.</p><button class="btn full" type="submit" ${ui.voterOptions.length?'':'disabled'}>Enter my ballot ${ico('arrow')}</button></form><button class="btn secondary full" style="margin-top:12px" data-action="refresh-voters">Refresh names</button>`}
  <button class="btn ghost full" data-action="home" style="margin-top:12px">Return to homepage</button></div></div>`;}
 function steps(stage){const titles=['Select','Review','Complete'];return `<div class="ballot-steps">${titles.map((t,i)=>`${i?'<span class="step divider"></span>':''}<span class="step ${stage===i?'active':stage>i?'completed':''}"><b>${i+1}</b>${t}</span>`).join('')}</div>`;}
 function rolePanel(body){const role=ROLES[body];return `<aside class="card responsibility-card"><div class="role-heading"><div class="role-icon">${ico(body==='board'?'crown':'shield','xl')}</div><div><div class="tinycaps" style="color:var(--gold)">Know your leaders</div><h2>${role.label}</h2></div></div><p class="role-copy">${esc(role.description)}</p><div class="seats-note">${ico('users')} ${role.seats} positions to be elected</div><hr class="line"><div class="tinycaps">Official roles & responsibilities</div><ol class="duties-list">${role.duties.map(d=>`<li>${esc(d)}</li>`).join('')}</ol>${role.note?`<div class="responsibility-note">${ico('info')}<span>${esc(role.note)}</span></div>`:''}</aside>`;}
@@ -352,12 +253,11 @@ function reviewView(){const group=body=>ui.picked[body].map(id=>candidateList(bo
  <div class="review-list">${['board','audit'].map(body=>`<div><div class="review-row"><div class="review-heading">${label(body)}</div><span class="tag">${ui.picked[body].length}/${ROLES[body].seats}</span></div><hr class="line"><ol>${group(body).map(n=>`<li>${esc(n)}</li>`).join('')||'<li>No selection</li>'}</ol></div>`).join('')}</div>
  <hr class="line"><div class="notice">${ico('info')} Board of Directors takes priority during final winner allocation. If one person wins a Board seat and also ranks in the Audit results, they are skipped for Audit and the next eligible candidate advances.</div>
  <div class="tools-row" style="margin-top:24px"><button class="btn secondary" data-action="back-ballot">${ico('edit')} Edit selections</button><button class="btn" data-action="confirm-modal">Submit my ballot ${ico('arrow')}</button></div></div></main>`;}
-function doneView(){return `<div class="center-shell"><div class="auth-card cast-success" style="text-align:center"><div class="cast-sparkles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="success-seal">${ico('check','xl')}</div><div class="tinycaps" style="color:var(--green);margin-top:27px">Ballot successfully cast</div><h1>Your vote is in!</h1><p>${api.mode==='demo'?'This was a demonstration vote, stored locally for testing only. It has not been submitted to an official election.':'Thank you for participating in the BEWNHS Cooperative Election. Your ballot has been securely recorded and your selections remain private.'}</p><button class="btn full" data-action="home" style="margin-top:24px">Return to homepage ${ico('arrow')}</button></div></div>`;}
+function doneView(){return `<div class="center-shell"><div class="auth-card cast-success" style="text-align:center"><div class="cast-sparkles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="success-seal">${ico('check','xl')}</div><div class="tinycaps" style="color:var(--green);margin-top:27px">Ballot successfully cast</div><h1>Your vote is in!</h1><p>Thank you for participating in the BEWNHS Cooperative Election. Your ballot has been securely recorded and your selections remain private.</p><button class="btn full" data-action="home" style="margin-top:24px">Return to homepage ${ico('arrow')}</button></div></div>`;}
 function adminLogin(){return `<div class="center-shell"><div class="auth-card"><div class="tinycaps" style="color:var(--wine)">Authorized personnel only</div><h1>Election administration</h1><p>Manage voter eligibility, candidate assignments, election status and official results.</p>
- ${api.mode==='demo'?`<div class="notice green">You are viewing a local demonstration. Click below to inspect the sample administrator dashboard. No password is required for demo mode.</div><button class="btn full big" data-action="demo-admin" style="margin-top:18px">Enter demo dashboard ${ico('arrow')}</button>`:
- `<form id="admin-login-form"><div class="field"><label for="admin-email">Administrator email</label><input id="admin-email" class="input" type="email" name="email" required autocomplete="username"></div><div class="field"><label for="admin-pass">Password</label><input id="admin-pass" class="input" type="password" name="password" required autocomplete="current-password"></div><button class="btn full big" type="submit">Secure sign in ${ico('lock')}</button></form>`}
+ <form id="admin-login-form"><div class="field"><label for="admin-email">Administrator email</label><input id="admin-email" class="input" type="email" name="email" required autocomplete="username"></div><div class="field"><label for="admin-pass">Password</label><input id="admin-pass" class="input" type="password" name="password" required autocomplete="current-password"></div><button class="btn full big" type="submit">Secure sign in ${ico('lock')}</button></form>
  <button class="btn ghost full" style="margin-top:14px" data-action="home">Return to homepage</button></div></div>`;}
-function adminShell(){const tab=ui.adminTab;const nav=[['overview','chart','Overview'],['voters','users','Voters & access'],['candidates','crown','Candidates'],['results','vote','Results & rankings'],['settings','settings','Election settings']];return `<main class="shell"><div class="admin-layout"><aside class="sidebar"><div class="side-heading"><strong>Election management</strong><p>${api.mode==='demo'?'Demo workspace':'Authenticated access'}</p></div>${nav.map(([key,icon,name])=>`<button class="navitem ${tab===key?'active':''}" data-action="tab" data-tab="${key}">${ico(icon)} ${name}</button>`).join('')}</aside><div class="admin-main"><div class="admin-hero"><div><div class="tinycaps" style="color:#f2c486">ELECTION CONTROL CENTER</div><h1>${tab==='overview'?'Dashboard':({voters:'Voter management',candidates:'Candidate assignments',results:'Election results',settings:'Election configuration'}[tab])}</h1><p>${api.mode==='demo'?'Demonstration records only — never included in official voting':'Confidential · Authorized Election Committee use'}</p></div><span class="tag ${ui.admin.settings.status==='open'?'green':'wine'}">${esc(nice(ui.admin.settings.status))}</span></div>${({overview:adminOverview,voters:adminVoters,candidates:adminCandidates,results:adminResults,settings:adminSettings}[tab]||adminOverview)()}</div></div></main>`;}
+function adminShell(){const tab=ui.adminTab;const nav=[['overview','chart','Overview'],['voters','users','Voters & access'],['candidates','crown','Candidates'],['results','vote','Results & rankings'],['settings','settings','Election settings']];return `<main class="shell"><div class="admin-layout"><aside class="sidebar"><div class="side-heading"><strong>Election management</strong><p>Authenticated access</p></div>${nav.map(([key,icon,name])=>`<button class="navitem ${tab===key?'active':''}" data-action="tab" data-tab="${key}">${ico(icon)} ${name}</button>`).join('')}</aside><div class="admin-main"><div class="admin-hero"><div><div class="tinycaps" style="color:#f2c486">ELECTION CONTROL CENTER</div><h1>${tab==='overview'?'Dashboard':({voters:'Voter management',candidates:'Candidate assignments',results:'Election results',settings:'Election configuration'}[tab])}</h1><p>Confidential · Authorized Election Committee use</p></div><span class="tag ${ui.admin.settings.status==='open'?'green':'wine'}">${esc(nice(ui.admin.settings.status))}</span></div>${({overview:adminOverview,voters:adminVoters,candidates:adminCandidates,results:adminResults,settings:adminSettings}[tab]||adminOverview)()}</div></div></main>`;}
 function metric(title,value,description,icon){return `<div class="metric"><span>${esc(title)} ${ico(icon)}</span><strong>${esc(value)}</strong><small>${esc(description)}</small></div>`;}
 function adminOverview(){const a=ui.admin;const turn=a.eligible_count?Math.round(a.voted_count/a.eligible_count*100):0;return `<div class="metrics">${metric('ELIGIBLE VOTERS',a.eligible_count,'Registered members','users')}${metric('BALLOTS CAST',a.ballots_count,'Recorded submissions','vote')}${metric('VOTER TURNOUT',turn+'%','Of eligible members','chart')}${metric('POSITIONS',8,'5 directors · 3 auditors','crown')}</div>
  <div class="card admin-card"><h2>Election participation</h2><div class="review-row"><span class="muted">${a.voted_count} of ${a.eligible_count} eligible voters have participated</span><strong>${turn}%</strong></div><div class="stat-progress"><div style="width:${Math.min(100,turn)}%"></div></div><p class="status-note">Participation is shown separately from anonymous ballot choices. Voter identities cannot be used to retrieve ballots.</p></div>
@@ -371,7 +271,7 @@ function adminCandidates(){const a=ui.admin;const locked=a.ballots_count>0;const
 function resultsSummary(){const r=ui.admin.results;const b=r?.board?.winner_ids.length||0;const a=r?.audit?.winner_ids.length||0;return `<div class="metrics">${metric('BOARD SEATS',b+'/5','Provisional directors','crown')}${metric('AUDIT SEATS',a+'/3','Provisional auditors','shield')}${metric('BALLOTS COUNTED',ui.admin.ballots_count,'Anonymous ballots','vote')}${metric('RESULT STATUS',ui.admin.settings.status.toUpperCase(),'Official on certification','lock')}</div>`;}
 function rankSection(body){const result=ui.admin.results?.[body];if(!result)return `<div class="card admin-card"><h2>${label(body)}</h2><div class="admin-empty">Awaiting final Board allocation or election closure.</div></div>`;
  const max=Math.max(1,...result.rows.map(r=>r.votes));const status={elected:'Elected',board_winner:'Elected to Board — skipped',tie_pending:'Tie — resolution required',not_elected:'Not elected'};
- return `<div class="card admin-card"><div class="tools-row"><h2 style="margin:0">${label(body)}</h2><span class="tag ${result.pending.length?'demo':'green'}">${result.winner_ids.length}/${result.seats} assigned</span></div><div class="rank-bars">${result.rows.map((r,i)=>`<div class="rank-row"><span class="rank-num">${i+1}</span><div><div class="rank-name">${esc(r.name)}</div><span class="rank-status">${esc(status[r.status]||r.status)}</span></div><div class="rank-track"><div class="rank-fill ${r.status==='elected'?'winner':''}" style="width:${r.votes/max*100}%"></div></div><span class="rank-total">${r.votes} <small>votes</small></span></div>`).join('')}</div>
+ return `<div class="card admin-card"><div class="tools-row"><h2 style="margin:0">${label(body)}</h2><span class="tag ${result.pending.length?'wine':'green'}">${result.winner_ids.length}/${result.seats} assigned</span></div><div class="rank-bars">${result.rows.map((r,i)=>`<div class="rank-row"><span class="rank-num">${i+1}</span><div><div class="rank-name">${esc(r.name)}</div><span class="rank-status">${esc(status[r.status]||r.status)}</span></div><div class="rank-track"><div class="rank-fill ${r.status==='elected'?'winner':''}" style="width:${r.votes/max*100}%"></div></div><span class="rank-total">${r.votes} <small>votes</small></span></div>`).join('')}</div>
  ${result.pending.map(group=>`<div class="notice red"><strong>Unresolved tie:</strong> ${group.candidates.map(c=>esc(c.name)).join(', ')} each have ${group.votes} votes for ${group.available} remaining seat(s). <button class="btn small" data-action="resolve-tie" data-body="${body}" data-votes="${group.votes}">Resolve tie</button></div>`).join('')}
  ${result.shortage?`<div class="notice red">Not enough eligible candidates to fill all seats. Resolve before certification.</div>`:''}
  </div>`;}
@@ -379,13 +279,13 @@ function adminResults(){const status=ui.admin.settings.status;const available=['
  `<div class="card admin-card"><div class="admin-empty">${ico('lock','xl')}<h2>Candidate vote totals are sealed</h2><p>To preserve election integrity, rankings become available only after the Election Committee closes voting. Participation counts remain visible under Overview.</p><button class="btn secondary" data-action="tab" data-tab="settings">Go to election settings</button></div></div>`}`;}
 function adminSettings(){const s=ui.admin.settings;return `<div class="card admin-card"><h2>Voting configuration</h2><p class="status-note">Configure the election before opening. You can add eligible voters and nominees while voting is open. Existing nominations are protected after ballots are cast.</p><form id="settings-form"><div class="settings-grid"><div class="field"><label>Election status</label><select name="status" class="input">${['draft','open','paused','closed','certified'].map(v=>`<option value="${v}" ${s.status===v?'selected':''}>${nice(v)}</option>`).join('')}</select></div><div class="field"><label>Ballot rules</label><select name="allow_partial" class="input"><option value="false" ${!s.allow_partial?'selected':''}>Require exactly 5 + 3 selections</option><option value="true" ${s.allow_partial?'selected':''}>Allow fewer selections (no more than 5 + 3)</option></select></div><div class="field"><label>Voting opens at (optional)</label><input class="input" type="datetime-local" name="starts_at" value="${esc(localDateTime(s.starts_at))}"></div><div class="field"><label>Voting closes at (optional)</label><input class="input" type="datetime-local" name="ends_at" value="${esc(localDateTime(s.ends_at))}"></div></div>
  <label class="switch-wrap" style="margin:7px 0 20px"><input type="checkbox" name="results_published" ${s.results_published?'checked':''}> Publish certified results to voters (after certification only)</label><div class="notice">Changing the status to <strong>Closed</strong> seals voting and makes administrator-only rankings available. <strong>Certified</strong> requires all seats to be resolved and filled.</div><button type="submit" class="btn" style="margin-top:19px">Save election settings</button></form></div>
- ${api.mode==='demo'?`<div class="card admin-card"><h2>Reset the interactive demo</h2><p class="status-note">Restore sample candidates, ballots and election settings. Does not affect any real data.</p><button class="btn secondary small" data-action="reset-demo">${ico('reset')} Reset all demo data</button></div>`:''}`;}
+ `;}
 function publicResultsView(){const obj=ui.publishedResults||{};const results=obj.results||{};const one=body=>{const r=results[body];return `<section class="card admin-card"><h2>${label(body)}</h2>${r?`<div class="rank-bars">${r.rows.map((row,i)=>`<div class="rank-row"><span class="rank-num">${i+1}</span><span class="rank-name">${esc(row.name)} <small class="rank-status">${row.status==='elected'?'Elected':row.status==='board_winner'?'Elected to Board — skipped':'Not elected'}</small></span><div class="rank-track"><div class="rank-fill ${row.status==='elected'?'winner':''}" style="width:${row.votes/Math.max(1,...r.rows.map(x=>x.votes))*100}%"></div></div><b class="rank-total">${row.votes}</b></div>`).join('')}</div>`:'Awaiting results'}</section>`;};return `<main class="shell"><div class="page-head"><div><div class="tinycaps" style="color:var(--wine)">Certified and officially released</div><h1>Official election results</h1><p>BEWNHS Cooperative · Final candidate rankings</p></div><button class="btn secondary" data-action="home">Return home</button></div><div class="result-grid">${one('board')}${one('audit')}</div><div class="notice">Board winners take priority over Audit Committee seats. Overlapping Audit candidates are skipped and the next eligible candidates advance, without changing original vote totals.</div></main>`;}
 function localDateTime(s){if(!s)return '';let d=new Date(s);if(Number.isNaN(+d))return '';const pad=v=>String(v).padStart(2,'0');return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;}
 function modalHtml(){if(!ui.modal)return '';let content='';
  if(ui.modal.type==='confirm'||ui.modal.type==='cast'){
  const choices=body=>ui.picked[body].map(id=>candidateList(body).find(c=>c.id===id)?.name||'Unknown candidate');
- content=`<div class="cast-illustration" aria-hidden="true"><div class="cast-rays"><i></i><i></i><i></i><i></i></div><div class="cast-paper">${ico('check')}</div><div class="cast-ballotbox"><span class="cast-slot"></span>${ico('vote')}</div></div><div class="cast-popup-label">ONE FINAL STEP</div><h2 id="cast-dialog-title">Ready to cast your vote?</h2><p class="cast-intro">Please review your selections below. Once you confirm, your ballot will be submitted and cannot be changed.</p><div class="cast-review-grid">${['board','audit'].map(body=>`<section class="cast-review-group"><div class="cast-review-heading">${ico(body==='board'?'crown':'shield')} <strong>${esc(label(body))}</strong><span>${ui.picked[body].length}/${ROLES[body].seats}</span></div><ol>${choices(body).map(n=>`<li>${esc(n)}</li>`).join('')||'<li>No selections</li>'}</ol></section>`).join('')}</div><div class="cast-privacy">${ico('lock')} ${api.mode==='demo'?'Demo vote only — no official ballot is recorded.':'Your vote is confidential. You can submit only once.'}</div><div class="modal-actions cast-actions"><button class="btn secondary" data-action="close-modal">Edit selections</button><button class="btn gold-submit" data-action="submit-final">${ico('vote')} Confirm & cast my vote</button></div>`;
+ content=`<div class="cast-illustration" aria-hidden="true"><div class="cast-rays"><i></i><i></i><i></i><i></i></div><div class="cast-paper">${ico('check')}</div><div class="cast-ballotbox"><span class="cast-slot"></span>${ico('vote')}</div></div><div class="cast-popup-label">ONE FINAL STEP</div><h2 id="cast-dialog-title">Ready to cast your vote?</h2><p class="cast-intro">Please review your selections below. Once you confirm, your ballot will be submitted and cannot be changed.</p><div class="cast-review-grid">${['board','audit'].map(body=>`<section class="cast-review-group"><div class="cast-review-heading">${ico(body==='board'?'crown':'shield')} <strong>${esc(label(body))}</strong><span>${ui.picked[body].length}/${ROLES[body].seats}</span></div><ol>${choices(body).map(n=>`<li>${esc(n)}</li>`).join('')||'<li>No selections</li>'}</ol></section>`).join('')}</div><div class="cast-privacy">${ico('lock')} Your vote is confidential. You can submit only once.</div><div class="modal-actions cast-actions"><button class="btn secondary" data-action="close-modal">Edit selections</button><button class="btn gold-submit" data-action="submit-final">${ico('vote')} Confirm & cast my vote</button></div>`;
  }
  if(ui.modal.type==='preparing')content=`<div class="cast-illustration is-submitting" aria-hidden="true"><div class="cast-paper">${ico('check')}</div><div class="cast-ballotbox"><span class="cast-slot"></span>${ico('vote')}</div></div><div class="cast-popup-label">YOUR VOICE MATTERS</div><h2 id="cast-dialog-title">Preparing your ballot…</h2><p class="cast-intro">Getting your Board and Audit candidate lists ready.</p><div class="casting-progress" role="status" aria-label="Preparing your ballot"><div></div></div>`;
  if(ui.modal.type==='casting')content=`<div class="cast-illustration is-submitting" aria-hidden="true"><div class="cast-rays"><i></i><i></i><i></i><i></i></div><div class="cast-paper">${ico('check')}</div><div class="cast-ballotbox"><span class="cast-slot"></span>${ico('vote')}</div></div><h2 id="cast-dialog-title">Casting your vote…</h2><p class="cast-intro">Please wait while we securely record your ballot.</p><div class="casting-progress" role="status" aria-live="polite"><div></div></div>`;
@@ -393,7 +293,7 @@ function modalHtml(){if(!ui.modal)return '';let content='';
  if(ui.modal.type==='tie'){const {body,group}=ui.modal;content=`<h2>Resolve ${esc(label(body))} tie</h2><p>These candidates are tied with <strong>${group.votes} votes</strong>. Select exactly <strong>${group.available}</strong> candidate(s) as determined by the Election Committee's documented tie-breaking procedure.</p><form id="tie-form" data-body="${body}" data-votes="${group.votes}"><div class="choice-grid">${group.candidates.map(c=>`<label class="radio-option"><input type="checkbox" name="tie" value="${esc(c.id)}"> ${esc(c.name)}</label>`).join('')}</div><div class="field"><label>Official tie-resolution notes</label><textarea class="input" required name="notes" placeholder="Document the approved rule or decision used to resolve this tie"></textarea></div><div class="modal-actions"><button type="button" class="btn secondary" data-action="close-modal">Cancel</button><button type="submit" class="btn">Record tie resolution</button></div></form>`;}
  if(ui.modal.type==='codes'){content=`<h2>Private voter access codes</h2><p>These codes are shown only once. Download them, then distribute each one directly to its intended eligible member.</p><div class="notice red">Do not share the entire list publicly. Keep this file securely protected and delete it when no longer needed.</div><div style="max-height:210px;overflow:auto;margin-top:12px"><table class="data-table" style="min-width:0"><tbody>${(ui.generatedCodes||[]).map(r=>`<tr><td>${esc(r.name)}</td><td><code>${esc(r.code)}</code></td></tr>`).join('')}</tbody></table></div><div class="modal-actions"><button class="btn secondary" data-action="close-modal">Close</button><button class="btn" data-action="download-codes">${ico('download')} Download private CSV</button></div>`;}
  return `<div class="modal-backdrop" ${['casting','preparing'].includes(ui.modal.type)?'':'data-action="close-modal"'}><div class="modal ${['cast','confirm','casting','preparing'].includes(ui.modal.type)?'cast-dialog':''}" role="dialog" aria-modal="true" ${['cast','confirm','casting','preparing'].includes(ui.modal.type)?'aria-labelledby="cast-dialog-title"':'aria-label="Election dialog"'} ${['casting','preparing'].includes(ui.modal.type)?'aria-busy="true"':''}>${content}</div></div>`;}
-function render(){let page;if(!ui.snapshot)page=`<div class="page-loading"><span class="loading-spinner"></span><p>Loading election data…</p></div>`;else if(ui.screen==='home')page=home();else if(ui.screen==='verify')page=verifyView();else if(ui.screen==='ballot')page=ballotView();else if(ui.screen==='review')page=reviewView();else if(ui.screen==='done')page=doneView();else if(ui.screen==='public-results')page=publicResultsView();else if(ui.screen==='admin-login')page=adminLogin();else if(ui.screen==='admin')page=ui.admin?adminShell():`<div class="page-loading"><span class="loading-spinner"></span></div>`;else page=home();
+function render(){let page;if(!isConfigured)page=`<div class="center-shell"><div class="auth-card"><div class="tinycaps" style="color:var(--wine)">Supabase setup required</div><h1>Connect your election portal</h1><p>This website runs only in live mode. Enter your Supabase project URL and publishable/anon key in <code>js/site-config.js</code>, then publish on GitHub Pages. No sample ballots or demo voting are available.</p></div></div>`;else if(ui.error)page=`<div class="center-shell"><div class="auth-card"><div class="tinycaps" style="color:var(--wine)">Election server unavailable</div><h1>Could not load election data</h1><p>${esc(ui.error)}</p><button class="btn full" data-action="retry-connection">Retry connection</button></div></div>`;else if(!ui.snapshot)page=`<div class="page-loading"><span class="loading-spinner"></span><p>Loading election data…</p></div>`;else if(ui.screen==='home')page=home();else if(ui.screen==='verify')page=verifyView();else if(ui.screen==='ballot')page=ballotView();else if(ui.screen==='review')page=reviewView();else if(ui.screen==='done')page=doneView();else if(ui.screen==='public-results')page=publicResultsView();else if(ui.screen==='admin-login')page=adminLogin();else if(ui.screen==='admin')page=ui.admin?adminShell():`<div class="page-loading"><span class="loading-spinner"></span></div>`;else page=home();
  $app.innerHTML=head()+page+(ui.screen==='done'?`<div class="selection-footer"><div class="shell selection-footer-inner">${steps(2)}</div></div>`:'')+footer()+modalHtml();}
 function validateBallot(){const s=ui.snapshot.settings;for(const body of ['board','audit']){const n=ui.picked[body].length;if(!s.allow_partial&&n!==ROLES[body].seats)throw Error(`Please select exactly ${ROLES[body].seats} ${label(body)} candidates.`);if(n>ROLES[body].seats)throw Error('You exceeded the allowed number of selections.');}return true;}
 function downloadFile(name,text,mime='text/csv;charset=utf-8'){const blob=new Blob([mime.startsWith('text/csv')?'\uFEFF':'',text],{type:mime});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
@@ -424,7 +324,6 @@ async function downloadResultsPng(){
 }
 function printResults(){const a=ui.admin;if(!a.results)throw Error('Results are not available yet.');const win=window.open('','_blank');if(!win)throw Error('Allow pop-ups to print the results.');const table=body=>`<h2>${label(body)}</h2><table><tr><th>Rank</th><th>Candidate</th><th>Votes</th><th>Status</th></tr>${(a.results?.[body]?.rows||[]).map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.name)}</td><td>${r.votes}</td><td>${esc(nice(r.status))}</td></tr>`).join('')}</table>`;win.document.write(`<!doctype html><html><head><title>BEWNHS Cooperative Election Results</title><style>body{font-family:Arial;padding:36px;color:#29262a}h1,h2{color:#68182f}h1{font-size:25px}table{width:100%;border-collapse:collapse;margin-bottom:30px;font-size:12px}td,th{text-align:left;border-bottom:1px solid #ddd;padding:9px}th{background:#f7f0ea}p{font-size:12px}.foot{margin-top:38px;border-top:1px solid #ddd;padding-top:16px}</style></head><body><h1>Bagumbayan-East Washington National High School Cooperative</h1><p>Election results · ${esc(nice(a.settings.status))} · ${new Date().toLocaleString()}</p><p>Eligible members: ${a.eligible_count} · Ballots: ${a.ballots_count}</p>${table('board')}${table('audit')}<p>Board winners take priority. Any overlapping Audit candidate is skipped, with original votes retained. Ties require an official decision.</p><div class="foot">Certified by: _______________________________________ &nbsp; Date: ______________</div></body></html>`);win.document.close();setTimeout(()=>{win.focus();win.print()},400);}
 function adminAllowed(){return ui.screen==='admin' && Boolean(ui.admin);}
-async function changeMode(){if(!isConfigured)return;await api.logout();api=api.mode==='live'?new DemoAPI():new LiveAPI();ui.code=api.mode==='demo'?DEMO_ACCESS_CODE:'';ui.picked={board:[],audit:[]};ui.admin=null;ui.snapshot=null;ui.screen='home';await getSnapshot();showToast(api.mode==='demo'?'Demo mode: sample data only.':'Live mode: connected to Supabase.','ok');}
 async function prepareBallot(){ui.modal={type:'preparing'};render();await new Promise(resolve=>setTimeout(resolve,1300));setScreen('ballot');}
 async function clickAction(e){if(ui.loading||['preparing','casting'].includes(ui.modal?.type))return;const el=e.target.closest('[data-action]');if(!el)return;const action=el.dataset.action;if(action==='toggle-pin'){const input=document.getElementById(el.dataset.target);input.type=input.type==='password'?'text':'password';el.textContent=input.type==='password'?'Show PIN':'Hide PIN';return;}if(action==='close-modal' && el.classList.contains('modal-backdrop') && e.target!==el)return;
  if(['start','home','admin-enter','back-ballot','close-modal','review','submit-ballot','ballot-tab','candidate','confirm-modal','tab','resolve-tie'].includes(action)){
@@ -444,16 +343,15 @@ async function clickAction(e){if(ui.loading||['preparing','casting'].includes(ui
  }
  if(action==='reset-vote'&&adminAllowed()){ui.modal={type:'reset-vote',member_id:el.dataset.id};render();return;}
  await run(async()=>{
+ if(action==='retry-connection'){ui.error='';ui.snapshot=null;render();await getSnapshot();render();}
  if(action==='refresh-voters'){ui.voterOptions=(await api.voterList(ui.pin)).members;}
- if(action==='change-mode') await changeMode();
  if(action==='public-results'){ui.publishedResults=await api.publicResults();setScreen('public-results');}
- if(action==='demo-admin'){await api.login();await getAdmin();setScreen('admin');}
  if(action==='logout'){await api.logout();ui.admin=null;setScreen('home')}
  if(action==='submit-final'){
    validateBallot();ui.modal={type:'casting'};render();
    let result;
    try{
-     // Let the ballot-box animation be visible even when the demo API resolves immediately.
+     // Keep the ballot-box animation visible during secure submission.
      [result]=await Promise.all([api.vote({pin:ui.pin,member_id:ui.member_id,generation:ui.generation,board:ui.picked.board,audit:ui.picked.audit}),new Promise(resolve=>setTimeout(resolve,1150))]);
    }catch(err){ui.modal={type:'cast'};render();throw err;}
    ui.receipt=result.reference;ui.modal=null;ui.code='';ui.pin='';ui.member_id='';ui.voterOptions=null;setScreen('done');
@@ -464,7 +362,6 @@ async function clickAction(e){if(ui.loading||['preparing','casting'].includes(ui
  if(action==='export-results')exportResults();
  if(action==='download-results-png')await downloadResultsPng();
  if(action==='print-results')printResults();
- if(action==='reset-demo'){if(!confirm('Reset all local demonstration data?'))return;await api.admin('reset_demo');ui.generatedCodes=null;await getAdmin();await getSnapshot();showToast('Demo restored to original sample data.','ok')}
  });
 }
 async function handleSubmit(e){const form=e.target;if(!['pin-form','pin-settings-form','reset-vote-form','voter-form','admin-login-form','add-member-form','add-candidate-form','settings-form','tie-form'].includes(form.id))return;e.preventDefault();await run(async()=>{
@@ -487,6 +384,6 @@ async function handleChange(e){const el=e.target;if(!el.dataset.field)return;con
  });}
 function handleInput(e){const body=e.target.dataset.search;if(!body)return;const pos=e.target.selectionStart;ui.search[body]=e.target.value;render();const replacement=document.querySelector(`[data-search="${body}"]`);if(replacement){replacement.focus();replacement.setSelectionRange(pos,pos);}}
 document.addEventListener('click',clickAction);document.addEventListener('submit',handleSubmit);document.addEventListener('change',handleChange);document.addEventListener('input',handleInput);document.addEventListener('keydown',e=>{if(e.key==='Escape'&&ui.modal&&!['casting','preparing'].includes(ui.modal.type)){ui.modal=null;render()}});
-getSnapshot().then(()=>render()).catch(e=>{ui.error=e.message;ui.snapshot={settings:{status:'draft'},candidates:[]};render();showToast('Unable to load election data: '+e.message,'error')});
+if(isConfigured){getSnapshot().then(()=>render()).catch(e=>{ui.error=e.message;render();showToast('Unable to load election data: '+e.message,'error')});}else{render();}
 
 })();
