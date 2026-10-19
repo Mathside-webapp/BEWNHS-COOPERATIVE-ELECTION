@@ -5,11 +5,11 @@
 // ===== SOURCE: js/config.js =====
 /**
  * Set these public values after deploying Supabase. Never place your service_role key here.
- * Values must be set to enable the live election. There is no demo fallback.
+ * With both values empty, the website offers the fully interactive OFFLINE DEMO only.
  */
 const CONFIG = {
-  SUPABASE_URL: '', // e.g. 'https://your-project.supabase.co'
-  SUPABASE_ANON_KEY: '', // publishable / anon key, never service_role
+  SUPABASE_URL: 'https://tzyibiwitxkbxpnoctky.supabase.co/', // e.g. 'https://your-project.supabase.co'
+  SUPABASE_ANON_KEY: 'sb_publishable_P7_M-BoJ_KgS5faLjgELyA_IrmtnKV9', // publishable / anon key, never service_role
   FUNCTION_NAME: 'election-api',
   SCHOOL: 'Bagumbayan-East Washington National High School',
   COOPERATIVE: 'BEWNHS Cooperative',
